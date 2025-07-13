@@ -22,3 +22,19 @@ class EditCatFSM(StatesGroup):
     choose = State()
     name = State()
     confirm = State()
+
+
+class DeleteCatFSM(StatesGroup):
+    choose = State()
+    confirm = State()
+
+
+class DeleteBtnFSM(StatesGroup):
+    choose_cat = State()
+    choose_btn = State()
+    confirm = State()
+
+
+class SortBtnFSM(StatesGroup):
+    choose_cat = State()
+    sort = State()
