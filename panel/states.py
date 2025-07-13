@@ -35,6 +35,12 @@ class DeleteBtnFSM(StatesGroup):
     confirm = State()
 
 
+class SortCatFSM(StatesGroup):
+    choose = State()
+    action = State()
+
+
 class SortBtnFSM(StatesGroup):
     choose_cat = State()
-    sort = State()
+    choose_btn = State()
+    action = State()

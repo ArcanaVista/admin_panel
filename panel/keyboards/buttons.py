@@ -49,15 +49,6 @@ def action_type_kb() -> InlineKeyboardMarkup:
 
 # --- Delete buttons ---
 
-def categories_for_buttons_kb(cats) -> InlineKeyboardMarkup:
-    builder = InlineKeyboardBuilder()
-    for cat in cats:
-        builder.button(text=cat.name, callback_data=f"del_btn_cat_{cat.id}")
-    builder.button(text="⬅️ В админ-панель", callback_data="panel_main")
-    builder.adjust(1)
-    return builder.as_markup()
-
-
 def buttons_delete_kb(btns, cat_id, page=0) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     start = page * BTNS_PER_PAGE
@@ -87,13 +78,30 @@ def confirm_delete_btn_kb() -> InlineKeyboardMarkup:
 
 # --- Sorting buttons ---
 
-def buttons_sort_kb(btns, cat_id) -> InlineKeyboardMarkup:
+def buttons_sort_list_kb(btns, cat_id, page=0) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    for b in btns:
-        builder.row(
-            InlineKeyboardButton(text=f"⬆️ {b.name}", callback_data=f"btn_up_{b.id}"),
-            InlineKeyboardButton(text="⬇️", callback_data=f"btn_down_{b.id}"),
-        )
+    start = page * BTNS_PER_PAGE
+    end = start + BTNS_PER_PAGE
+    btns_on_page = btns[start:end]
+    for b in btns_on_page:
+        builder.button(text=f"{b.sort_order}. {b.name}", callback_data=f"reorder_btn_{b.id}_{page}")
+    builder.adjust(1)
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"sort_btn_cat_{cat_id}_page_{page-1}"))
+    if end < len(btns):
+        nav.append(InlineKeyboardButton(text="Вперёд ➡️", callback_data=f"sort_btn_cat_{cat_id}_page_{page+1}"))
+    if nav:
+        builder.row(*nav)
     builder.row(InlineKeyboardButton(text="⬅️ Категории", callback_data="sort_buttons"))
     builder.row(InlineKeyboardButton(text="⬅️ В админ-панель", callback_data="panel_main"))
+    return builder.as_markup()
+
+
+def button_sort_actions_kb(btn_id: int, cat_id: int, page: int) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="⬆️ Вверх", callback_data=f"reorder_up_btn_{btn_id}_{cat_id}_{page}")
+    builder.button(text="⬇️ Вниз", callback_data=f"reorder_down_btn_{btn_id}_{cat_id}_{page}")
+    builder.button(text="⬅️ Назад", callback_data=f"sort_btn_cat_{cat_id}_page_{page}")
+    builder.adjust(1)
     return builder.as_markup()

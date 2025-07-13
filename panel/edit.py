@@ -19,10 +19,19 @@ from .keyboards import (
     categories_for_buttons_kb,
     buttons_delete_kb,
     confirm_delete_btn_kb,
-    categories_sort_kb,
-    buttons_sort_kb,
+    categories_sort_list_kb,
+    category_sort_actions_kb,
+    buttons_sort_list_kb,
+    button_sort_actions_kb,
 )
-from .states import EditBtnFSM, EditCatFSM, DeleteCatFSM, DeleteBtnFSM, SortBtnFSM
+from .states import (
+    EditBtnFSM,
+    EditCatFSM,
+    DeleteCatFSM,
+    DeleteBtnFSM,
+    SortCatFSM,
+    SortBtnFSM,
+)
 from ..menu import panel_main_cb
 
 from app.utils import admin_only_message, admin_only_callback
@@ -599,149 +608,197 @@ async def delete_button_cancel(callback: CallbackQuery, state: FSMContext):
     await callback.message.edit_text("Удаление отменено.", reply_markup=panel_main_kb())
 
 
-@router.callback_query(F.data == "sort_categories")
-@admin_only_callback
-async def sort_categories_start(callback: CallbackQuery):
+async def show_categories_sort_page(callback, state: FSMContext, page: int = 0):
     async with SessionLocal() as session:
-        cats = (await session.execute(select(ButtonCategory).order_by(ButtonCategory.sort_order))).scalars().all()
+        cats = (
+            await session.execute(
+                select(ButtonCategory).order_by(ButtonCategory.sort_order, ButtonCategory.id)
+            )
+        ).scalars().all()
     if not cats:
         await callback.message.edit_text("Категорий нет.", reply_markup=panel_main_kb())
         return
+    total_pages = (len(cats) - 1) // CATS_PER_PAGE + 1
+    await state.set_state(SortCatFSM.choose)
     await callback.message.edit_text(
-        "Сортировка категорий:",
-        reply_markup=categories_sort_kb(cats),
+        f"Выберите категорию (стр. {page+1}/{total_pages}):",
+        reply_markup=categories_sort_list_kb(cats, page=page),
     )
 
 
-@router.callback_query(F.data.regexp(r"^cat_up_(\d+)$"))
+@router.callback_query(F.data == "sort_categories")
 @admin_only_callback
-async def sort_category_up(callback: CallbackQuery):
-    import re
-    cat_id = int(re.match(r"^cat_up_(\d+)$", callback.data).group(1))
-    async with SessionLocal() as session:
-        cat = await session.get(ButtonCategory, cat_id)
-        prev = (
-            await session.execute(
-                select(ButtonCategory)
-                .where(ButtonCategory.sort_order < cat.sort_order)
-                .order_by(ButtonCategory.sort_order.desc())
-            )
-        ).scalars().first()
-        if prev:
-            cat.sort_order, prev.sort_order = prev.sort_order, cat.sort_order
-            await session.commit()
-        cats = (await session.execute(select(ButtonCategory).order_by(ButtonCategory.sort_order))).scalars().all()
-    await callback.message.edit_reply_markup(reply_markup=categories_sort_kb(cats))
+async def sort_categories_start(callback: CallbackQuery, state: FSMContext):
+    await show_categories_sort_page(callback, state, page=0)
 
 
-@router.callback_query(F.data.regexp(r"^cat_down_(\d+)$"))
+@router.callback_query(F.data.regexp(r"^sort_categories_page_(\d+)$"))
 @admin_only_callback
-async def sort_category_down(callback: CallbackQuery):
-    import re
-    cat_id = int(re.match(r"^cat_down_(\d+)$", callback.data).group(1))
+async def sort_categories_page(callback: CallbackQuery, state: FSMContext):
+    page = int(callback.data.split("_")[-1])
+    await show_categories_sort_page(callback, state, page)
+
+
+@router.callback_query(SortCatFSM.choose, F.data.regexp(r"^reorder_cat_(\d+)_(\d+)$"))
+@admin_only_callback
+async def sort_category_choose(callback: CallbackQuery, state: FSMContext):
+    cat_id, page = map(int, callback.data.split("_")[-2:])
+    await state.update_data(cat_id=cat_id, cat_page=page)
     async with SessionLocal() as session:
         cat = await session.get(ButtonCategory, cat_id)
-        nxt = (
+    await state.set_state(SortCatFSM.action)
+    await callback.message.edit_text(
+        f"Категория: {cat.name}\nВыберите действие:",
+        reply_markup=category_sort_actions_kb(cat_id, page),
+    )
+
+
+@router.callback_query(SortCatFSM.action, F.data.regexp(r"^reorder_(up|down)_cat_(\d+)_(\d+)$"))
+@admin_only_callback
+async def sort_category_move(callback: CallbackQuery, state: FSMContext):
+    direction, cat_id, page = callback.data.split("_")[-3:]
+    cat_id, page = int(cat_id), int(page)
+    async with SessionLocal() as session:
+        cats = (
             await session.execute(
-                select(ButtonCategory)
-                .where(ButtonCategory.sort_order > cat.sort_order)
-                .order_by(ButtonCategory.sort_order)
+                select(ButtonCategory).order_by(ButtonCategory.sort_order, ButtonCategory.id)
             )
-        ).scalars().first()
-        if nxt:
-            cat.sort_order, nxt.sort_order = nxt.sort_order, cat.sort_order
+        ).scalars().all()
+        ids = [c.id for c in cats]
+        idx = ids.index(cat_id)
+        if direction == "up" and idx > 0:
+            cats[idx].sort_order, cats[idx-1].sort_order = cats[idx-1].sort_order, cats[idx].sort_order
+            session.add_all([cats[idx], cats[idx-1]])
             await session.commit()
-        cats = (await session.execute(select(ButtonCategory).order_by(ButtonCategory.sort_order))).scalars().all()
-    await callback.message.edit_reply_markup(reply_markup=categories_sort_kb(cats))
+        elif direction == "down" and idx < len(cats) - 1:
+            cats[idx].sort_order, cats[idx+1].sort_order = cats[idx+1].sort_order, cats[idx].sort_order
+            session.add_all([cats[idx], cats[idx+1]])
+            await session.commit()
+    await show_categories_sort_page(callback, state, page=page)
+
+
+async def show_sort_buttons_categories(callback, state: FSMContext, page: int = 0):
+    async with SessionLocal() as session:
+        cats = (
+            await session.execute(select(ButtonCategory).order_by(ButtonCategory.sort_order))
+        ).scalars().all()
+    if not cats:
+        await callback.message.edit_text("Категорий нет.", reply_markup=panel_main_kb())
+        return
+    total_pages = (len(cats) - 1) // CATS_PER_PAGE + 1
+    await state.set_state(SortBtnFSM.choose_cat)
+    await callback.message.edit_text(
+        f"Выберите категорию (стр. {page+1}/{total_pages}):",
+        reply_markup=categories_for_buttons_kb(cats, prefix="sort_btn_cat", page=page),
+    )
 
 
 @router.callback_query(F.data == "sort_buttons")
 @admin_only_callback
 async def sort_buttons_choose_cat(callback: CallbackQuery, state: FSMContext):
-    async with SessionLocal() as session:
-        cats = (await session.execute(select(ButtonCategory).order_by(ButtonCategory.sort_order))).scalars().all()
-    if not cats:
-        await callback.message.edit_text("Категорий нет.", reply_markup=panel_main_kb())
-        return
-    await state.set_state(SortBtnFSM.choose_cat)
-    await callback.message.edit_text(
-        "Выберите категорию:",
-        reply_markup=categories_for_buttons_kb(cats, prefix="sort_btn_cat"),
-    )
+    await show_sort_buttons_categories(callback, state, page=0)
 
 
-@router.callback_query(SortBtnFSM.choose_cat, F.data.regexp(r"^sort_btn_cat_(\d+)$"))
+@router.callback_query(F.data.regexp(r"^sort_buttons_page_(\d+)$"))
 @admin_only_callback
-async def sort_buttons_start(callback: CallbackQuery, state: FSMContext):
-    import re
-    cat_id = int(re.match(r"^sort_btn_cat_(\d+)$", callback.data).group(1))
+async def sort_buttons_choose_cat_page(callback: CallbackQuery, state: FSMContext):
+    page = int(callback.data.split("_")[-1])
+    await show_sort_buttons_categories(callback, state, page)
+
+
+async def show_buttons_sort_page(callback, state: FSMContext, cat_id: int, page: int = 0):
     async with SessionLocal() as session:
         btns = (
             await session.execute(
-                select(ActionButton).where(ActionButton.category_id == cat_id).order_by(ActionButton.sort_order)
+                select(ActionButton)
+                .where(ActionButton.category_id == cat_id)
+                .order_by(ActionButton.sort_order, ActionButton.id)
             )
         ).scalars().all()
     if not btns:
         await callback.message.edit_text("В этой категории нет кнопок.", reply_markup=panel_main_kb())
         await state.clear()
         return
-    await state.update_data(cat_id=cat_id)
-    await state.set_state(SortBtnFSM.sort)
+    total_pages = (len(btns) - 1) // BTNS_PER_PAGE + 1
+    await state.set_state(SortBtnFSM.choose_btn)
     await callback.message.edit_text(
-        "Сортировка кнопок:",
-        reply_markup=buttons_sort_kb(btns, cat_id),
+        f"Выберите кнопку (стр. {page+1}/{total_pages}):",
+        reply_markup=buttons_sort_list_kb(btns, cat_id, page=page),
     )
 
 
-@router.callback_query(SortBtnFSM.sort, F.data.regexp(r"^btn_up_(\d+)$"))
+@router.callback_query(SortBtnFSM.choose_cat, F.data.regexp(r"^sort_btn_cat_(\d+)_page_(\d+)$"))
 @admin_only_callback
-async def sort_button_up(callback: CallbackQuery, state: FSMContext):
+async def sort_buttons_start(callback: CallbackQuery, state: FSMContext):
     import re
-    btn_id = int(re.match(r"^btn_up_(\d+)$", callback.data).group(1))
-    data = await state.get_data()
-    cat_id = data.get("cat_id")
-    async with SessionLocal() as session:
-        btn = await session.get(ActionButton, btn_id)
-        prev = (
-            await session.execute(
-                select(ActionButton)
-                .where(ActionButton.category_id == cat_id, ActionButton.sort_order < btn.sort_order)
-                .order_by(ActionButton.sort_order.desc())
-            )
-        ).scalars().first()
-        if prev:
-            btn.sort_order, prev.sort_order = prev.sort_order, btn.sort_order
-            await session.commit()
-        btns = (
-            await session.execute(
-                select(ActionButton).where(ActionButton.category_id == cat_id).order_by(ActionButton.sort_order)
-            )
-        ).scalars().all()
-    await callback.message.edit_reply_markup(reply_markup=buttons_sort_kb(btns, cat_id))
+    m = re.match(r"^sort_btn_cat_(\d+)_page_(\d+)$", callback.data)
+    cat_id = int(m.group(1))
+    page = int(m.group(2))
+    await state.update_data(cat_id=cat_id, cat_page=page)
+    await show_buttons_sort_page(callback, state, cat_id, page=0)
 
 
-@router.callback_query(SortBtnFSM.sort, F.data.regexp(r"^btn_down_(\d+)$"))
+@router.callback_query(SortBtnFSM.choose_btn, F.data.regexp(r"^sort_btn_cat_(\d+)_page_(\d+)$"))
 @admin_only_callback
-async def sort_button_down(callback: CallbackQuery, state: FSMContext):
+async def sort_buttons_page(callback: CallbackQuery, state: FSMContext):
     import re
-    btn_id = int(re.match(r"^btn_down_(\d+)$", callback.data).group(1))
+    m = re.match(r"^sort_btn_cat_(\d+)_page_(\d+)$", callback.data)
+    cat_id = int(m.group(1))
+    page = int(m.group(2))
+    await state.update_data(cat_id=cat_id, btn_page=page)
+    await show_buttons_sort_page(callback, state, cat_id, page)
+
+
+@router.callback_query(SortBtnFSM.choose_btn, F.data.regexp(r"^reorder_btn_(\d+)_(\d+)$"))
+@admin_only_callback
+async def sort_button_choose(callback: CallbackQuery, state: FSMContext):
+    btn_id, page = map(int, callback.data.split("_")[-2:])
     data = await state.get_data()
     cat_id = data.get("cat_id")
+    await state.update_data(btn_id=btn_id, btn_page=page)
     async with SessionLocal() as session:
         btn = await session.get(ActionButton, btn_id)
-        nxt = (
-            await session.execute(
-                select(ActionButton)
-                .where(ActionButton.category_id == cat_id, ActionButton.sort_order > btn.sort_order)
-                .order_by(ActionButton.sort_order)
-            )
-        ).scalars().first()
-        if nxt:
-            btn.sort_order, nxt.sort_order = nxt.sort_order, btn.sort_order
-            await session.commit()
+    await state.set_state(SortBtnFSM.action)
+    await callback.message.edit_text(
+        f"Кнопка: {btn.name}\nВыберите действие:",
+        reply_markup=button_sort_actions_kb(btn_id, cat_id, page),
+    )
+
+
+@router.callback_query(SortBtnFSM.action, F.data.regexp(r"^sort_btn_cat_(\d+)_page_(\d+)$"))
+@admin_only_callback
+async def back_to_buttons_from_action(callback: CallbackQuery, state: FSMContext):
+    import re
+    m = re.match(r"^sort_btn_cat_(\d+)_page_(\d+)$", callback.data)
+    cat_id = int(m.group(1))
+    page = int(m.group(2))
+    await state.update_data(cat_id=cat_id, btn_page=page)
+    await show_buttons_sort_page(callback, state, cat_id, page)
+
+
+@router.callback_query(SortBtnFSM.action, F.data.regexp(r"^reorder_(up|down)_btn_(\d+)_(\d+)_(\d+)$"))
+@admin_only_callback
+async def sort_button_move(callback: CallbackQuery, state: FSMContext):
+    direction, btn_id, cat_id, page = callback.data.split("_")[-4:]
+    btn_id, cat_id, page = int(btn_id), int(cat_id), int(page)
+    async with SessionLocal() as session:
         btns = (
             await session.execute(
-                select(ActionButton).where(ActionButton.category_id == cat_id).order_by(ActionButton.sort_order)
+                select(ActionButton)
+                .where(ActionButton.category_id == cat_id)
+                .order_by(ActionButton.sort_order, ActionButton.id)
             )
         ).scalars().all()
-    await callback.message.edit_reply_markup(reply_markup=buttons_sort_kb(btns, cat_id))
+        ids = [b.id for b in btns]
+        idx = ids.index(btn_id)
+        if direction == "up" and idx > 0:
+            a, b = btns[idx - 1], btns[idx]
+            a.sort_order, b.sort_order = b.sort_order, a.sort_order
+            session.add_all([a, b])
+            await session.commit()
+        elif direction == "down" and idx < len(btns) - 1:
+            a, b = btns[idx], btns[idx + 1]
+            a.sort_order, b.sort_order = b.sort_order, a.sort_order
+            session.add_all([a, b])
+            await session.commit()
+    await show_buttons_sort_page(callback, state, cat_id, page)

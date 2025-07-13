@@ -90,22 +90,49 @@ def confirm_delete_cat_kb() -> InlineKeyboardMarkup:
 
 # --- Sorting categories ---
 
-def categories_sort_kb(cats) -> InlineKeyboardMarkup:
+def categories_sort_list_kb(cats, page=0) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    for cat in cats:
-        builder.row(
-            InlineKeyboardButton(text=f"⬆️ {cat.name}", callback_data=f"cat_up_{cat.id}"),
-            InlineKeyboardButton(text="⬇️", callback_data=f"cat_down_{cat.id}"),
-        )
+    start = page * CATS_PER_PAGE
+    end = start + CATS_PER_PAGE
+    cats_on_page = cats[start:end]
+    for c in cats_on_page:
+        builder.button(text=f"{c.sort_order}. {c.name}", callback_data=f"reorder_cat_{c.id}_{page}")
+    builder.adjust(1)
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"sort_categories_page_{page-1}"))
+    if end < len(cats):
+        nav.append(InlineKeyboardButton(text="Вперёд ➡️", callback_data=f"sort_categories_page_{page+1}"))
+    if nav:
+        builder.row(*nav)
     builder.row(InlineKeyboardButton(text="⬅️ В админ-панель", callback_data="panel_main"))
+    return builder.as_markup()
+
+
+def category_sort_actions_kb(cat_id: int, page: int) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="⬆️ Вверх", callback_data=f"reorder_up_cat_{cat_id}_{page}")
+    builder.button(text="⬇️ Вниз", callback_data=f"reorder_down_cat_{cat_id}_{page}")
+    builder.button(text="⬅️ Назад", callback_data=f"sort_categories_page_{page}")
+    builder.adjust(1)
     return builder.as_markup()
 
 # --- Selecting category for button actions ---
 
-def categories_for_buttons_kb(cats, prefix: str) -> InlineKeyboardMarkup:
+def categories_for_buttons_kb(cats, prefix: str, page=0) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    for cat in cats:
-        builder.button(text=cat.name, callback_data=f"{prefix}_{cat.id}")
-    builder.button(text="⬅️ В админ-панель", callback_data="panel_main")
+    start = page * CATS_PER_PAGE
+    end = start + CATS_PER_PAGE
+    cats_on_page = cats[start:end]
+    for cat in cats_on_page:
+        builder.button(text=cat.name, callback_data=f"{prefix}_{cat.id}_page_0")
     builder.adjust(1)
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"sort_buttons_page_{page-1}"))
+    if end < len(cats):
+        nav.append(InlineKeyboardButton(text="Вперёд ➡️", callback_data=f"sort_buttons_page_{page+1}"))
+    if nav:
+        builder.row(*nav)
+    builder.row(InlineKeyboardButton(text="⬅️ В админ-панель", callback_data="panel_main"))
     return builder.as_markup()
